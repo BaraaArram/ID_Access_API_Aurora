@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: access_api_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: access_api
+      POSTGRES_USER: access_api
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U access_api -d access_api"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: node:20-alpine
+    container_name: access_api_service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    environment:
+      PORT: 5085
+      ACCESS_API_KEY: ${ACCESS_API_KEY}
+      DB_PROVIDER: postgres
+      DATABASE_URL: postgresql://access_api:${POSTGRES_PASSWORD}@postgres:5432/access_api
+      PG_SCHEMA: public
+      PG_TABLE: Sgaza
+      PG_SSL: "false"
+      DEFAULT_TABLE: Sgaza
+      ALLOWED_TABLES: Sgaza,قائمة الموظفين
+      ALLOWED_ID_COLUMNS: الهوية,id,identity
+    volumes:
+      - ./:/app
+    command: sh -lc "npm ci --omit=dev && npm start"
+    ports:
+      - "5085:5085"
+
+volumes:
+  pg_data:

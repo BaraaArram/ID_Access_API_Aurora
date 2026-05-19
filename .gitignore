@@ -1,0 +1,13 @@
+bin/
+obj/
+*.user
+*.suo
+*.accdb
+*.laccdb
+node_modules/
+.env
+.env.local
+dist/
+build/
+.env.vm
+*.csv
