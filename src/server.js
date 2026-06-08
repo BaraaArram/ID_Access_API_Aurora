@@ -17,6 +17,8 @@ const PG_TABLE = String(process.env.PG_TABLE || '').trim();
 const PG_TABLE_EXTRA = String(process.env.PG_TABLE_EXTRA || '').trim();
 const PG_SSL = toBool(process.env.PG_SSL, false);
 const PG_SSL_EXTRA = toBool(process.env.PG_SSL_EXTRA, PG_SSL);
+const STATS_PASSWORD = String(process.env.STATS_PASSWORD || '').trim();
+const STATS_FILE_PATH = path.resolve(__dirname, '../stats.json');
 const ALLOWED_TABLES = toSet(process.env.ALLOWED_TABLES, ['Sgaza', 'قائمة الموظفين', 'sgaza_extra']);
 const ALLOWED_ID_COLUMNS = toSet(process.env.ALLOWED_ID_COLUMNS, ['الهوية', 'id', 'identity']);
 const PG_COLUMN_CACHE = new Map();
@@ -79,6 +81,22 @@ app.get('/health', async (_req, res) => {
         payload.databases.extraError = String(error.message || error);
       }
     }
+  }
+
+  try {
+    const walletStats = await loadWalletStats();
+    payload.walletStats = {
+      totalSubmissions: walletStats.totalSubmissions,
+      walletsCreated: walletStats.walletsCreated,
+      updatedAt: walletStats.updatedAt
+    };
+  } catch (error) {
+    payload.walletStats = {
+      totalSubmissions: 0,
+      walletsCreated: 0,
+      updatedAt: null,
+      error: String(error.message || error)
+    };
   }
 
   return res.json(payload);
@@ -207,6 +225,59 @@ app.get('/user', async (req, res) => {
   }
 });
 
+app.post('/wallet-submission', async (req, res) => {
+  if (!API_KEY) {
+    return res.status(500).json({ success: false, error: 'API key is not configured' });
+  }
+
+  const providedKey = String(req.header('X-Api-Key') || '').trim();
+  if (providedKey !== API_KEY) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  const userId = String(req.body.userId || '').trim();
+  if (!userId) {
+    return res.status(400).json({ success: false, error: 'Missing userId' });
+  }
+
+  try {
+    const stats = await loadWalletStats();
+    stats.totalSubmissions += 1;
+    stats.walletsCreated += 1;
+    if (userId) {
+      if (!stats.uniqueUserIds[userId]) {
+        stats.uniqueUserIds[userId] = 0;
+      }
+      stats.uniqueUserIds[userId] += 1;
+    }
+    await saveWalletStats(stats);
+
+    return res.json({
+      success: true,
+      stats: {
+        totalSubmissions: stats.totalSubmissions,
+        walletsCreated: stats.walletsCreated
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: String(error.message || error) });
+  }
+});
+
+app.get('/stats', async (req, res) => {
+  const authResult = validateStatsPassword(req);
+  if (!authResult.success) {
+    return res.status(authResult.status).json({ success: false, error: authResult.error });
+  }
+
+  try {
+    const stats = await loadWalletStats();
+    return res.json(createProtectedStatsResponse(stats));
+  } catch (error) {
+    return res.status(500).json({ success: false, error: String(error.message || error) });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Access API (Node) running on http://localhost:${PORT}`);
   console.log(`Provider: ${DB_PROVIDER}`);
@@ -221,6 +292,63 @@ app.listen(PORT, () => {
     }
   }
 });
+
+async function loadWalletStats() {
+  try {
+    const content = await fs.promises.readFile(STATS_FILE_PATH, 'utf8');
+    const stats = JSON.parse(content);
+    return {
+      totalSubmissions: Number(stats.totalSubmissions || 0),
+      walletsCreated: Number(stats.walletsCreated || stats.uniqueWalletsCreated || 0),
+      uniqueUserIds: stats.uniqueUserIds || {},
+      updatedAt: stats.updatedAt || null
+    };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return {
+        totalSubmissions: 0,
+        walletsCreated: 0,
+        uniqueUserIds: {},
+        updatedAt: null
+      };
+    }
+    throw error;
+  }
+}
+
+async function saveWalletStats(stats) {
+  const payload = {
+    totalSubmissions: Number(stats.totalSubmissions || 0),
+    walletsCreated: Number(stats.walletsCreated || stats.uniqueWalletsCreated || 0),
+    uniqueWalletsCreated: Number(stats.walletsCreated || stats.uniqueWalletsCreated || 0),
+    uniqueUserIds: stats.uniqueUserIds || {},
+    updatedAt: new Date().toISOString()
+  };
+  await fs.promises.writeFile(STATS_FILE_PATH, JSON.stringify(payload, null, 2), 'utf8');
+  return payload;
+}
+
+function createProtectedStatsResponse(stats) {
+  return {
+    success: true,
+    stats: {
+      totalSubmissions: Number(stats.totalSubmissions || 0),
+      walletsCreated: Number(stats.walletsCreated || stats.uniqueWalletsCreated || 0),
+      updatedAt: stats.updatedAt || null
+    }
+  };
+}
+
+function validateStatsPassword(req) {
+  if (!STATS_PASSWORD) {
+    return { success: false, status: 503, error: 'Stats password is not configured' };
+  }
+  const provided = String(req.header('X-Stats-Password') || '').trim();
+  if (!provided || provided !== STATS_PASSWORD) {
+    return { success: false, status: 401, error: 'Unauthorized' };
+  }
+  return { success: true };
+}
 
 function resolveQueryValue(req, plainKey, base64Key) {
   const b64 = String(req.query[base64Key] || '').trim();
