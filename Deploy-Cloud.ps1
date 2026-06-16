@@ -228,7 +228,7 @@ function Get-EssentialOnlyColumnIndexes {
 # ---------------------------------------------------------------------------
 
 Write-Step 'Checking prerequisites'
-
+I
 Assert-Command 'flyctl' 'Download from https://fly.io/install.ps1 or run: winget install Fly.flyctl'
 Assert-Command 'node' 'Download from https://nodejs.org'
 

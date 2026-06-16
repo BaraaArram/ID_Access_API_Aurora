@@ -14,6 +14,7 @@ primary_region = 'iad'
   PG_SCHEMA = 'public'
   PG_SSL = 'true'
   PORT = '8080'
+  TOKEN_API_URL = 'https://token-api-mellowed-skylark.fly.dev'
 
 [http_service]
   internal_port = 8080

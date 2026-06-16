@@ -102,16 +102,48 @@ app.get('/health', async (_req, res) => {
   return res.json(payload);
 });
 
-app.get('/user', async (req, res) => {
-  if (!API_KEY) {
-    return res.status(500).json({ success: false, error: 'API key is not configured' });
+const TOKEN_API_URL = process.env.TOKEN_API_URL || 'http://localhost:4000';
+
+async function verifyTokenMiddleware(req, res, next) {
+  const token = req.header('X-Access-Token') || req.header('X-Api-Key') || (req.header('Authorization') ? req.header('Authorization').replace(/^Bearer\s+/i, '') : '');
+  const deviceId = req.header('X-Device-Id') || req.body?.deviceId || req.query?.deviceId;
+  const username = req.header('X-Username') || req.body?.username || req.query?.username;
+
+  if (API_KEY && token === API_KEY) {
+    return next();
   }
 
-  const providedKey = String(req.header('X-Api-Key') || '').trim();
-  if (providedKey !== API_KEY) {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Access token is required' });
+  }
+  if (!deviceId) {
+    return res.status(400).json({ success: false, error: 'Device ID is required' });
   }
 
+  try {
+    const fetchResponse = await fetch(`${TOKEN_API_URL.replace(/\/$/, '')}/verify-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, deviceId, username })
+    });
+
+    const data = await fetchResponse.json().catch(() => ({}));
+    if (!fetchResponse.ok || !data.success) {
+      return res.status(fetchResponse.status === 200 ? 403 : fetchResponse.status).json({
+        success: false,
+        error: data.error || 'Token verification failed'
+      });
+    }
+
+    req.tokenDetails = data;
+    return next();
+  } catch (error) {
+    console.error('Failed to contact token-api for validation:', error);
+    return res.status(502).json({ success: false, error: 'Token validation service unavailable' });
+  }
+}
+
+app.get('/user', verifyTokenMiddleware, async (req, res) => {
   const idValue = resolveQueryValue(req, 'id', 'id64');
   const tableName = resolveQueryValue(req, 'table', 'table64') || DEFAULT_TABLE;
   const requestedIdColumn = resolveQueryValue(req, 'idColumn', 'idColumn64') || 'الهوية';
@@ -225,16 +257,7 @@ app.get('/user', async (req, res) => {
   }
 });
 
-app.post('/wallet-submission', async (req, res) => {
-  if (!API_KEY) {
-    return res.status(500).json({ success: false, error: 'API key is not configured' });
-  }
-
-  const providedKey = String(req.header('X-Api-Key') || '').trim();
-  if (providedKey !== API_KEY) {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
-  }
-
+app.post('/wallet-submission', verifyTokenMiddleware, async (req, res) => {
   const userId = String(req.body.userId || '').trim();
   if (!userId) {
     return res.status(400).json({ success: false, error: 'Missing userId' });
